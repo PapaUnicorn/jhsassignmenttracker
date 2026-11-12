@@ -14,13 +14,19 @@ import {
   Loader2,
   Calendar,
   AlertCircle,
-  ExternalLink as NewTabIcon,
   Sparkles,
   KeyRound,
+  ArrowUp,
+  ArrowDown,
+  Filter,
+  Copy,
+  Check,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   ConsolidatedTask,
-  filterByDateRange,
+  filterAndSortClassroomTasks,
+  DeadlineSortOrder,
 } from './utils/classroom-logic';
 import {
   fetchLiveGoogleClassroomData,
@@ -28,9 +34,10 @@ import {
   fetchGoogleUserProfile,
 } from './services/classroomApi';
 import {
-  triggerSynchronousGisLogin,
+  executeGoogleLogin,
   logoutUser,
   setAccessToken as cacheAccessToken,
+  OAUTH_CLIENT_ID,
 } from './services/auth';
 import { StudentProfile } from './data/mockClassroomData';
 
@@ -38,13 +45,22 @@ export default function App() {
   const [student, setStudent] = useState<StudentProfile | null>(null);
   const [tasks, setTasks] = useState<ConsolidatedTask[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  
+  // Filters & Sorting state
   const [dateFilter, setDateFilter] = useState<'all' | 'this_month'>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [sortByDeadline, setSortByDeadline] = useState<DeadlineSortOrder>('RECENT_FIRST');
+
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [showOriginMismatchGuide, setShowOriginMismatchGuide] = useState<boolean>(false);
+  const [copiedOrigin, setCopiedOrigin] = useState<boolean>(false);
   const [showManualTokenInput, setShowManualTokenInput] = useState<boolean>(false);
   const [manualToken, setManualToken] = useState<string>('');
+
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
 
   /**
    * Load real data from Google Classroom API
@@ -53,6 +69,7 @@ export default function App() {
     setIsLoading(true);
     setStatusMessage('Mengambil data mata pelajaran dan tugas dari Google Classroom akun Anda...');
     setErrorMessage(null);
+    setShowOriginMismatchGuide(false);
 
     try {
       const [profile, liveData] = await Promise.all([
@@ -81,6 +98,7 @@ export default function App() {
     setIsLoading(true);
     setStatusMessage('Memuat contoh data simulasi Makarios...');
     setErrorMessage(null);
+    setShowOriginMismatchGuide(false);
     try {
       const simulated = await fetchSimulatedClassroomData();
       setTasks(simulated.tasks);
@@ -101,35 +119,61 @@ export default function App() {
   };
 
   /**
-   * Synchronous Login Trigger:
-   * Called immediately inside the click event to avoid browser popup blocker restrictions.
+   * Google Sign-In Handler
    */
-  const handleLoginClick = () => {
+  const handleLoginClick = async () => {
     setIsLoading(true);
-    setStatusMessage('Membuka dialog persetujuan Google...');
+    setStatusMessage('Membuka dialog login Google...');
     setErrorMessage(null);
+    setShowOriginMismatchGuide(false);
 
-    const triggered = triggerSynchronousGisLogin(
-      async (token: string) => {
+    await executeGoogleLogin(
+      async (token: string, user) => {
         setAccessToken(token);
+        if (user) {
+          setStudent({
+            name: user.displayName || 'Siswa Makarios',
+            email: user.email || 'siswa@makarios.sch.id',
+            school: 'Makarios Christian School - Junior High School',
+            grade: 'Junior High School',
+            avatarUrl: user.photoURL || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=160&q=80',
+          });
+        }
         await loadClassroomData(token);
       },
       (err: Error) => {
         setIsLoading(false);
         setStatusMessage('');
+
         if (err.message === 'USER_CLOSED_POPUP') {
-          // User dismissed or closed the login window without completing
-          setErrorMessage(null);
-        } else {
-          setErrorMessage(err.message);
+          // If the popup was closed, suggest the origin mismatch guide in case Google blocked it
+          setShowOriginMismatchGuide(true);
+          setErrorMessage(
+            'Jendela login ditutup. Jika Google menampilkan "Error 400: origin_mismatch" di jendela tersebut, silakan ikuti panduan di bawah untuk mendaftarkan URL asal ini ke Google Cloud Console.'
+          );
+          return;
         }
+
+        if (err.message === 'ORIGIN_MISMATCH' || err.message.includes('origin_mismatch')) {
+          setShowOriginMismatchGuide(true);
+          setErrorMessage(
+            'Error 400: origin_mismatch — Domain URL ini belum terdaftar di Google Cloud Console pada OAuth Client ID Anda.'
+          );
+          return;
+        }
+
+        setErrorMessage(err.message || 'Login Google dibatalkan atau gagal.');
       }
     );
+  };
 
-    if (!triggered) {
-      setIsLoading(false);
-      setStatusMessage('');
-    }
+  /**
+   * Copy current origin to clipboard
+   */
+  const handleCopyOrigin = () => {
+    navigator.clipboard.writeText(currentOrigin);
+    setCopiedOrigin(true);
+    setTimeout(() => setCopiedOrigin(false), 2500);
   };
 
   /**
@@ -155,13 +199,25 @@ export default function App() {
       setStudent(null);
       setTasks([]);
       setErrorMessage(null);
+      setShowOriginMismatchGuide(false);
     });
   };
 
-  // Filter tasks by date: All or This Month
+  /**
+   * Toggle Deadline Sorting (Recent First vs Oldest First)
+   */
+  const handleToggleDeadlineSort = () => {
+    setSortByDeadline((prev) => (prev === 'RECENT_FIRST' ? 'OLDEST_FIRST' : 'RECENT_FIRST'));
+  };
+
+  // Filter & sort tasks by date range, status, and deadline order
   const displayedTasks = useMemo(() => {
-    return filterByDateRange(tasks, dateFilter);
-  }, [tasks, dateFilter]);
+    return filterAndSortClassroomTasks(tasks, {
+      dateRange: dateFilter,
+      statusFilter,
+      sortByDeadline,
+    });
+  }, [tasks, dateFilter, statusFilter, sortByDeadline]);
 
   // Status Badge Helper
   const renderStatusBadge = (task: ConsolidatedTask) => {
@@ -196,11 +252,6 @@ export default function App() {
         );
     }
   };
-
-  const isPopupBlockError =
-    errorMessage?.includes('popup') ||
-    errorMessage?.includes('Popup') ||
-    errorMessage?.includes('Failed to open popup');
 
   return (
     <div className="min-h-screen bg-white text-slate-900 p-6 sm:p-10 max-w-6xl mx-auto font-sans">
@@ -240,20 +291,118 @@ export default function App() {
                 <span>Logout</span>
               </button>
             ) : (
-              <button
-                onClick={handleLoginClick}
-                disabled={isLoading}
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-md text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 shadow-xs transition-colors disabled:opacity-50"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                <span>Sign in with Google</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleLoginClick}
+                  disabled={isLoading}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-md text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 shadow-xs transition-colors disabled:opacity-50"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Sign in with Google</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowOriginMismatchGuide(!showOriginMismatchGuide)}
+                  title="Klik jika menemui Error 400: origin_mismatch di Google"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />
+                  <span className="hidden sm:inline">Solusi Error 400</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
 
-        {/* Error notification banner */}
-        {errorMessage && (
+        {/* Origin Mismatch Resolution Guide Banner */}
+        {showOriginMismatchGuide && (
+          <div className="mt-4 p-4 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-xs space-y-3">
+            <div className="flex items-start gap-2.5">
+              <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <strong className="font-bold text-sm text-amber-900 block mb-1">
+                  Cara Mengatasi Error 400: origin_mismatch
+                </strong>
+                <p className="leading-relaxed text-amber-800">
+                  Google memblokir login akun <strong>helena.suzane@sekolahmakarios.id</strong> karena URL domain web ini belum dimasukkan ke daftar <em>Authorized JavaScript origins</em> di Google Cloud Console Client ID Anda.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowOriginMismatchGuide(false)}
+                className="text-amber-600 hover:text-amber-900 font-bold px-2 py-0.5 text-xs"
+              >
+                Tutup
+              </button>
+            </div>
+
+            <div className="bg-white p-3 rounded-lg border border-amber-200 space-y-2">
+              <span className="font-semibold text-slate-700 block">
+                Langkah 1: Salin URL Asal (*Authorized JavaScript Origin*) ini:
+              </span>
+              <div className="flex items-center gap-2">
+                <code className="bg-slate-100 text-slate-800 px-2.5 py-1.5 rounded font-mono text-xs flex-1 truncate select-all border border-slate-200">
+                  {currentOrigin}
+                </code>
+                <button
+                  type="button"
+                  onClick={handleCopyOrigin}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded text-xs flex items-center gap-1.5 shrink-0 transition-colors"
+                >
+                  {copiedOrigin ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedOrigin ? 'Tersalin!' : 'Salin URL'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 text-slate-700">
+              <p>
+                <strong>Langkah 2: Tambahkan ke Google Cloud Console:</strong>
+              </p>
+              <ol className="list-decimal list-inside space-y-1 pl-1 text-slate-800 leading-relaxed">
+                <li>
+                  Buka langsung halaman credentials proyek:{' '}
+                  <a
+                    href="https://console.cloud.google.com/apis/credentials?project=gen-lang-client-0367272811"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-indigo-600 hover:underline font-semibold inline-flex items-center gap-0.5"
+                  >
+                    Google Cloud Console Credentials (gen-lang-client-0367272811) <ExternalLink className="w-3 h-3" />
+                  </a>
+                </li>
+                <li>
+                  Klik nama OAuth 2.0 Client ID (<strong>StudentAssignmentTracker</strong> atau Web client).
+                </li>
+                <li>
+                  Di bagian <strong>Authorized JavaScript origins</strong> (Asal JavaScript yang diotorisasi), klik <strong>+ ADD URI</strong> dan tempelkan URL dari Langkah 1.
+                </li>
+                <li>
+                  Klik <strong>SAVE (Simpan)</strong> di bagian bawah halaman.
+                </li>
+              </ol>
+            </div>
+
+            <div className="space-y-1 text-slate-700 pt-1">
+              <p>
+                <strong>Langkah 3:</strong> Kembali ke halaman ini dan klik tombol <strong>Sign in with Google</strong> lagi. Login akan langsung berhasil!
+              </p>
+            </div>
+
+            <div className="pt-2 border-t border-amber-200/80 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowManualTokenInput(!showManualTokenInput)}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-semibold text-xs transition-colors"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>Atau Masukkan Access Token Manual</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Standard Error notification banner */}
+        {errorMessage && !showOriginMismatchGuide && (
           <div className="mt-4 p-4 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-2">
             <div className="flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
@@ -268,40 +417,17 @@ export default function App() {
                 Tutup
               </button>
             </div>
-
-            {/* If popup blocked or iframe issue, offer easy solutions */}
-            {isPopupBlockError && (
-              <div className="pt-2 border-t border-rose-200 flex flex-wrap items-center gap-2">
-                <a
-                  href={window.location.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs shadow-2xs transition-colors"
-                >
-                  <NewTabIcon className="w-3.5 h-3.5" />
-                  <span>Buka di Tab Baru (Bebas Pembatasan Iframe)</span>
-                </a>
-                <button
-                  type="button"
-                  onClick={() => setShowManualTokenInput(!showManualTokenInput)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-white hover:bg-rose-100 text-rose-700 border border-rose-300 font-semibold text-xs transition-colors"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span>Masukkan Access Token Manual</span>
-                </button>
-              </div>
-            )}
           </div>
         )}
 
-        {/* Manual token input form if popup is blocked */}
+        {/* Manual token input form */}
         {showManualTokenInput && (
           <form
             onSubmit={handleApplyManualToken}
             className="mt-4 p-4 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-2"
           >
             <label className="block font-semibold text-slate-700">
-              Tempelkan OAuth Access Token Google:
+              Tempelkan OAuth Access Token Google (dari OAuth Playground atau gcloud):
             </label>
             <div className="flex gap-2">
               <input
@@ -322,39 +448,95 @@ export default function App() {
         )}
       </header>
 
-      {/* 2. Date Filter: (all, this month) */}
-      <div className="flex items-center gap-2 mb-6">
-        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider mr-2 flex items-center gap-1">
-          <Calendar className="w-3.5 h-3.5" />
-          Date Filter:
-        </span>
-        <button
-          onClick={() => setDateFilter('all')}
-          className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-            dateFilter === 'all'
-              ? 'bg-indigo-600 text-white'
-              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-          }`}
-        >
-          All
-        </button>
-        <button
-          onClick={() => setDateFilter('this_month')}
-          className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-            dateFilter === 'this_month'
-              ? 'bg-indigo-600 text-white'
-              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-          }`}
-        >
-          This Month
-        </button>
+      {/* 2. Filters & Sort Controls: Date Filter, Assignment Status Filter, and Deadline Sort */}
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-100">
+        <div className="flex flex-wrap items-center gap-4">
+          {/* Date Filter: (all, this month) */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5" />
+              Date:
+            </span>
+            <div className="inline-flex rounded-md shadow-2xs">
+              <button
+                onClick={() => setDateFilter('all')}
+                className={`px-3 py-1.5 rounded-l-md text-xs font-semibold transition-colors border border-slate-200 ${
+                  dateFilter === 'all'
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setDateFilter('this_month')}
+                className={`px-3 py-1.5 rounded-r-md text-xs font-semibold transition-colors border border-l-0 border-slate-200 ${
+                  dateFilter === 'this_month'
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                This Month
+              </button>
+            </div>
+          </div>
+
+          {/* Assignment Status Filter */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+              <Filter className="w-3.5 h-3.5" />
+              Status:
+            </span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="text-xs font-medium bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5 text-slate-800 cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+            >
+              <option value="ALL">Semua Status (All)</option>
+              <option value="CREATED">Belum Dikerjakan</option>
+              <option value="TURNED_IN">Diserahkan</option>
+              <option value="RETURNED">Dinilai</option>
+              <option value="MISSING">Terlambat</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Deadline Sort Control */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+            Urutan Deadline:
+          </span>
+          <button
+            onClick={handleToggleDeadlineSort}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 transition-colors"
+          >
+            {sortByDeadline === 'RECENT_FIRST' ? (
+              <>
+                <ArrowUp className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Paling Recent (Terdekat → Lama)</span>
+              </>
+            ) : (
+              <>
+                <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Paling Lama (Terjauh → Recent)</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* 3. Daftar Semua Assignments (Tabel: Subject, Description with links, Deadline, Assignment Status) */}
       <section>
-        <h3 className="text-base font-bold text-slate-900 mb-4">
-          Daftar Semua Assignments
-        </h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-bold text-slate-900">
+            Daftar Semua Assignments
+          </h3>
+          {tasks.length > 0 && (
+            <span className="text-xs text-slate-500 font-medium">
+              Menampilkan {displayedTasks.length} dari {tasks.length} tugas
+            </span>
+          )}
+        </div>
 
         {isLoading ? (
           <div className="flex flex-col items-center justify-center p-12 text-slate-500 text-sm gap-3 border border-slate-200 rounded-lg">
@@ -387,10 +569,19 @@ export default function App() {
             </div>
           </div>
         ) : displayedTasks.length === 0 ? (
-          <div className="p-8 text-center border border-dashed border-slate-300 rounded-lg text-slate-500 text-sm">
-            {isLoggedIn
-              ? 'Tidak ada tugas yang ditemukan di akun Google Classroom Anda untuk filter tanggal ini.'
-              : 'Tidak ada tugas untuk filter tanggal yang dipilih.'}
+          <div className="p-8 text-center border border-dashed border-slate-300 rounded-lg text-slate-500 text-sm space-y-2">
+            <p>Tidak ada tugas yang cocok dengan filter tanggal atau status yang dipilih.</p>
+            {(statusFilter !== 'ALL' || dateFilter !== 'all') && (
+              <button
+                onClick={() => {
+                  setDateFilter('all');
+                  setStatusFilter('ALL');
+                }}
+                className="text-xs text-indigo-600 hover:underline font-semibold"
+              >
+                Reset Filter
+              </button>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-xs">
@@ -399,7 +590,20 @@ export default function App() {
                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-semibold text-xs uppercase tracking-wider">
                   <th className="py-3 px-4 w-1/4">Subject</th>
                   <th className="py-3 px-4 w-2/5">Description</th>
-                  <th className="py-3 px-4 w-1/5">Deadline</th>
+                  <th
+                    onClick={handleToggleDeadlineSort}
+                    title="Klik untuk mengubah urutan deadline"
+                    className="py-3 px-4 w-1/5 cursor-pointer hover:bg-slate-100 transition-colors select-none group"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span>Deadline</span>
+                      {sortByDeadline === 'RECENT_FIRST' ? (
+                        <ArrowUp className="w-3.5 h-3.5 text-indigo-600" />
+                      ) : (
+                        <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
+                      )}
+                    </div>
+                  </th>
                   <th className="py-3 px-4 w-1/6">Assignment Status</th>
                 </tr>
               </thead>

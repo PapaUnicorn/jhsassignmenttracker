@@ -8,6 +8,7 @@ import {
   calculateTaskStatistics,
   filterAndSortTasks,
   filterByDateRange,
+  filterAndSortClassroomTasks,
   Course,
   CourseWork,
   StudentSubmission,
@@ -210,4 +211,51 @@ test('filterByDateRange filters correctly between all and this_month', () => {
   const thisMonth = filterByDateRange([thisMonthTask, nextMonthTask], 'this_month', refNow);
   assert.equal(thisMonth.length, 1);
   assert.equal(thisMonth[0].title, 'Tugas November');
+});
+
+test('filterAndSortClassroomTasks handles status filter and deadline sorting', () => {
+  const dummyCourse: Course = {
+    id: 'c-test',
+    name: 'Matematika',
+    courseState: 'ACTIVE',
+  };
+
+  const task1 = buildConsolidatedTask(
+    dummyCourse,
+    {
+      id: '1',
+      courseId: 'c-test',
+      title: 'Tugas Terdekat (18 Nov)',
+      state: 'PUBLISHED',
+      dueDate: { year: 2026, month: 11, day: 18 },
+    },
+    { id: 's1', courseId: 'c-test', courseWorkId: '1', userId: 'u', state: 'CREATED' }
+  );
+
+  const task2 = buildConsolidatedTask(
+    dummyCourse,
+    {
+      id: '2',
+      courseId: 'c-test',
+      title: 'Tugas Terjauh (28 Nov)',
+      state: 'PUBLISHED',
+      dueDate: { year: 2026, month: 11, day: 28 },
+    },
+    { id: 's2', courseId: 'c-test', courseWorkId: '2', userId: 'u', state: 'TURNED_IN' }
+  );
+
+  // Status filtering
+  const turnedInOnly = filterAndSortClassroomTasks([task1, task2], { statusFilter: 'TURNED_IN' });
+  assert.equal(turnedInOnly.length, 1);
+  assert.equal(turnedInOnly[0].title, 'Tugas Terjauh (28 Nov)');
+
+  // Deadline sorting: RECENT_FIRST (18 Nov before 28 Nov)
+  const recentFirst = filterAndSortClassroomTasks([task2, task1], { sortByDeadline: 'RECENT_FIRST' });
+  assert.equal(recentFirst[0].title, 'Tugas Terdekat (18 Nov)');
+  assert.equal(recentFirst[1].title, 'Tugas Terjauh (28 Nov)');
+
+  // Deadline sorting: OLDEST_FIRST (28 Nov before 18 Nov)
+  const oldestFirst = filterAndSortClassroomTasks([task1, task2], { sortByDeadline: 'OLDEST_FIRST' });
+  assert.equal(oldestFirst[0].title, 'Tugas Terjauh (28 Nov)');
+  assert.equal(oldestFirst[1].title, 'Tugas Terdekat (18 Nov)');
 });

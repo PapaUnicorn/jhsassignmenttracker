@@ -399,3 +399,46 @@ export function filterByDateRange(
   });
 }
 
+export type DeadlineSortOrder = 'RECENT_FIRST' | 'OLDEST_FIRST';
+
+/**
+ * Filter and sort assignments by date range, status, and deadline order
+ */
+export function filterAndSortClassroomTasks(
+  tasks: ConsolidatedTask[],
+  options: {
+    dateRange?: 'all' | 'this_month';
+    statusFilter?: string;
+    sortByDeadline?: DeadlineSortOrder;
+  },
+  referenceNow = Date.now()
+): ConsolidatedTask[] {
+  let result = tasks;
+
+  // 1. Date Range filter
+  if (options.dateRange === 'this_month') {
+    result = filterByDateRange(result, 'this_month', referenceNow);
+  }
+
+  // 2. Assignment Status filter
+  if (options.statusFilter && options.statusFilter !== 'ALL') {
+    result = result.filter((task) => task.status === options.statusFilter);
+  }
+
+  // 3. Deadline sort
+  const sortOrder = options.sortByDeadline || 'RECENT_FIRST';
+  return [...result].sort((a, b) => {
+    // If no due date, place at the bottom regardless of sort
+    if (a.dueTimestamp === null && b.dueTimestamp === null) return 0;
+    if (a.dueTimestamp === null) return 1;
+    if (b.dueTimestamp === null) return -1;
+
+    if (sortOrder === 'RECENT_FIRST') {
+      return a.dueTimestamp - b.dueTimestamp;
+    } else {
+      return b.dueTimestamp - a.dueTimestamp;
+    }
+  });
+}
+
+

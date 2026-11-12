@@ -1,13 +1,26 @@
 /**
- * Google Workspace OAuth & Google Identity Services (GIS) Integration
+ * Google Workspace OAuth & Firebase Authentication
  * 
- * Optimized for browser popup security:
- * - Token client is initialized early and invoked synchronously on user click
- * - Preserves browser user activation context to prevent popup blocker errors
- * - Manages in-memory OAuth access token
+ * Supports:
+ * 1. Firebase Auth signInWithPopup (routes via authDomain gen-lang-client-0367272811.firebaseapp.com to prevent origin_mismatch)
+ * 2. Google Identity Services (GIS) Token Client fallback
+ * 3. In-memory Access Token caching
  */
 
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  getAuth,
+  signInWithPopup,
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  User,
+  signOut,
+} from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
+
+// Initialize Firebase App instance
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+export const auth = getAuth(app);
 
 export const OAUTH_CLIENT_ID =
   firebaseConfig.oAuthClientId ||
@@ -25,118 +38,179 @@ export const WORKSPACE_SCOPES = [
 let cachedAccessToken: string | null = null;
 let gisTokenClient: any = null;
 
+const provider = new GoogleAuthProvider();
+WORKSPACE_SCOPES.forEach((scope) => {
+  provider.addScope(scope);
+});
+provider.setCustomParameters({
+  prompt: 'select_account',
+});
+
 /**
- * Initialize or get the GIS Token Client singleton
+ * Initialize Firebase Auth state listener
  */
-export function getOrCreateGisTokenClient(
-  onSuccess: (token: string) => void,
-  onError: (err: Error) => void
-) {
-  if (typeof window === 'undefined' || !window.google?.accounts?.oauth2) {
-    return null;
+export const initAuth = (
+  onAuthSuccess?: (user: User, token: string) => void,
+  onAuthFailure?: () => void
+) => {
+  return onAuthStateChanged(auth, async (user: User | null) => {
+    if (user) {
+      if (cachedAccessToken) {
+        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
+      } else {
+        if (onAuthFailure) onAuthFailure();
+      }
+    } else {
+      cachedAccessToken = null;
+      if (onAuthFailure) onAuthFailure();
+    }
+  });
+};
+
+/**
+ * Primary Sign-In using Firebase Auth popup (routes through *.firebaseapp.com to prevent origin_mismatch)
+ */
+export async function signInWithFirebaseAuth(): Promise<{
+  accessToken: string;
+  user: User;
+}> {
+  const result = await signInWithPopup(auth, provider);
+  const credential = GoogleAuthProvider.credentialFromResult(result);
+  if (!credential?.accessToken) {
+    throw new Error('Gagal memperoleh Google OAuth Access Token dari autentikasi.');
   }
 
-  // Update callbacks
-  gisTokenClient = window.google.accounts.oauth2.initTokenClient({
-    client_id: OAUTH_CLIENT_ID,
-    scope: WORKSPACE_SCOPES.join(' '),
-    callback: (response: any) => {
-      if (response.error) {
-        const errorDesc = response.error_description || response.error;
-        console.error('GIS Callback Error:', response);
-        onError(new Error(`Login Google dibatalkan atau ditolak: ${errorDesc}`));
-        return;
-      }
-
-      if (response.access_token) {
-        cachedAccessToken = response.access_token;
-        onSuccess(response.access_token);
-      } else {
-        onError(new Error('Tidak ada Access Token yang diterima dari Google.'));
-      }
-    },
-    error_callback: (err: any) => {
-      const isClosedByUser =
-        err?.type === 'popup_closed' ||
-        err?.message?.includes('Popup window closed') ||
-        err?.message?.includes('popup_closed');
-
-      if (isClosedByUser) {
-        console.info('Jendela dialog Google Sign-In ditutup oleh pengguna.');
-        onError(new Error('USER_CLOSED_POPUP'));
-        return;
-      }
-
-      console.warn('GIS Notice:', err);
-      let errorMsg = 'Gagal membuka popup Google Sign-In.';
-      if (err?.type === 'popup_failed_to_open' || err?.message?.includes('Failed to open popup')) {
-        errorMsg =
-          'Popup Google diblokir oleh browser. Pastikan untuk mengizinkan popup untuk situs ini atau buka aplikasi di tab baru.';
-      }
-      onError(new Error(errorMsg));
-    },
-  });
-
-  return gisTokenClient;
+  cachedAccessToken = credential.accessToken;
+  return { accessToken: credential.accessToken, user: result.user };
 }
 
 /**
- * Trigger GIS Login synchronously on user click to prevent browser popup blockers
+ * Fallback Sign-In using Google Identity Services (GIS) Token Client
  */
-export function triggerSynchronousGisLogin(
+export function signInWithGisClient(
   onSuccess: (token: string) => void,
   onError: (err: Error) => void
 ): boolean {
-  try {
-    const client = getOrCreateGisTokenClient(onSuccess, onError);
-    if (!client) {
-      onError(
-        new Error(
-          'Library Google Identity Services belum selesai dimuat. Tunggu beberapa saat lalu klik kembali.'
-        )
-      );
-      return false;
-    }
+  if (typeof window === 'undefined' || !window.google?.accounts?.oauth2) {
+    onError(new Error('Google Identity Services SDK belum selesai dimuat.'));
+    return false;
+  }
 
-    // Must be called synchronously inside user event
-    client.requestAccessToken({ prompt: 'select_account' });
+  try {
+    gisTokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: OAUTH_CLIENT_ID,
+      scope: WORKSPACE_SCOPES.join(' '),
+      callback: (response: any) => {
+        if (response.error) {
+          const desc = response.error_description || response.error;
+          if (desc?.includes('origin_mismatch') || response.error === 'origin_mismatch') {
+            onError(new Error('ORIGIN_MISMATCH'));
+          } else {
+            onError(new Error(`Login Google dibatalkan atau ditolak: ${desc}`));
+          }
+          return;
+        }
+
+        if (response.access_token) {
+          cachedAccessToken = response.access_token;
+          onSuccess(response.access_token);
+        } else {
+          onError(new Error('Tidak ada Access Token yang diterima dari Google.'));
+        }
+      },
+      error_callback: (err: any) => {
+        const isClosed =
+          err?.type === 'popup_closed' ||
+          err?.message?.includes('Popup window closed');
+        if (isClosed) {
+          onError(new Error('USER_CLOSED_POPUP'));
+          return;
+        }
+
+        if (err?.message?.includes('origin_mismatch')) {
+          onError(new Error('ORIGIN_MISMATCH'));
+          return;
+        }
+
+        onError(new Error(err?.message || 'Gagal membuka jendela login Google.'));
+      },
+    });
+
+    gisTokenClient.requestAccessToken({ prompt: 'select_account' });
     return true;
   } catch (err: any) {
-    console.error('Failed to trigger GIS login:', err);
-    onError(new Error(err.message || 'Gagal memulai login Google.'));
+    onError(new Error(err.message || 'Gagal memulai GIS login.'));
     return false;
   }
 }
 
 /**
- * Get in-memory access token
+ * Universal Google Sign-In:
+ * 1. Tries Firebase Auth popup (whitelisted authDomain to prevent origin_mismatch)
+ * 2. If Firebase Auth reports domain issues, tries GIS Token Client
+ */
+export async function executeGoogleLogin(
+  onSuccess: (token: string, user?: User) => void,
+  onError: (err: Error) => void
+) {
+  try {
+    // Attempt 1: Firebase Auth popup
+    const res = await signInWithFirebaseAuth();
+    if (res?.accessToken) {
+      onSuccess(res.accessToken, res.user);
+      return;
+    }
+  } catch (firebaseErr: any) {
+    console.warn('Firebase Auth sign in attempt notice:', firebaseErr);
+
+    // If popup was explicitly closed by user
+    if (firebaseErr.code === 'auth/popup-closed-by-user') {
+      onError(new Error('USER_CLOSED_POPUP'));
+      return;
+    }
+
+    // Attempt 2: GIS Token Client
+    signInWithGisClient(
+      (token) => onSuccess(token),
+      (gisErr) => {
+        onError(gisErr);
+      }
+    );
+  }
+}
+
+/**
+ * Get in-memory cached token
  */
 export function getAccessToken(): string | null {
   return cachedAccessToken;
 }
 
 /**
- * Set token manually (e.g. from token prompt or restore)
+ * Set in-memory token
  */
 export function setAccessToken(token: string | null) {
   cachedAccessToken = token;
 }
 
 /**
- * Revoke and clear token on logout
+ * Sign out
  */
-export function logoutUser(onComplete?: () => void) {
+export async function logoutUser(onComplete?: () => void) {
   if (cachedAccessToken && window.google?.accounts?.oauth2) {
     try {
       window.google.accounts.oauth2.revoke(cachedAccessToken, () => {
         console.log('Google Access Token revoked.');
-        cachedAccessToken = null;
-        onComplete?.();
       });
-      return;
     } catch (e) {
-      console.warn('Revoke warning:', e);
+      console.warn('Revoke error:', e);
     }
+  }
+
+  try {
+    await signOut(auth);
+  } catch (e) {
+    console.warn('SignOut error:', e);
   }
 
   cachedAccessToken = null;
