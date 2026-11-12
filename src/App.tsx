@@ -37,7 +37,9 @@ import {
   executeGoogleLogin,
   logoutUser,
   setAccessToken as cacheAccessToken,
-  OAUTH_CLIENT_ID,
+  getActiveClientId,
+  setActiveClientId,
+  DEFAULT_OAUTH_CLIENT_ID,
 } from './services/auth';
 import { StudentProfile } from './data/mockClassroomData';
 
@@ -60,7 +62,33 @@ export default function App() {
   const [showManualTokenInput, setShowManualTokenInput] = useState<boolean>(false);
   const [manualToken, setManualToken] = useState<string>('');
 
+  const [currentClientId, setCurrentClientId] = useState<string>(getActiveClientId());
+  const [tempClientId, setTempClientId] = useState<string>(getActiveClientId());
+  const [isEditingClientId, setIsEditingClientId] = useState<boolean>(false);
+  const [copiedSharedOrigin, setCopiedSharedOrigin] = useState<boolean>(false);
+  const sharedOrigin = 'https://ais-pre-szdq4klnfap6zh5enbuoxg-77765964593.asia-southeast1.run.app';
+
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+
+  const handleCopySharedOrigin = () => {
+    navigator.clipboard.writeText(sharedOrigin);
+    setCopiedSharedOrigin(true);
+    setTimeout(() => setCopiedSharedOrigin(false), 2500);
+  };
+
+  const handleSaveClientId = (e: React.FormEvent) => {
+    e.preventDefault();
+    setActiveClientId(tempClientId);
+    setCurrentClientId(tempClientId.trim() || DEFAULT_OAUTH_CLIENT_ID);
+    setIsEditingClientId(false);
+  };
+
+  const handleResetClientId = () => {
+    setActiveClientId('');
+    setTempClientId(DEFAULT_OAUTH_CLIENT_ID);
+    setCurrentClientId(DEFAULT_OAUTH_CLIENT_ID);
+    setIsEditingClientId(false);
+  };
 
   /**
    * Load real data from Google Classroom API
@@ -335,67 +363,138 @@ export default function App() {
               </button>
             </div>
 
-            <div className="bg-white p-3 rounded-lg border border-amber-200 space-y-2">
-              <span className="font-semibold text-slate-700 block">
-                Langkah 1: Salin URL Asal (*Authorized JavaScript Origin*) ini:
-              </span>
-              <div className="flex items-center gap-2">
-                <code className="bg-slate-100 text-slate-800 px-2.5 py-1.5 rounded font-mono text-xs flex-1 truncate select-all border border-slate-200">
-                  {currentOrigin}
-                </code>
+            <div className="bg-white p-3.5 rounded-lg border border-amber-200 space-y-3">
+              <div>
+                <span className="font-semibold text-slate-800 block mb-1">
+                  1. Daftarkan KEDUA URL ini di Authorized JavaScript origins:
+                </span>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-medium text-slate-500 w-16 shrink-0">Dev URL:</span>
+                    <code className="bg-slate-100 text-slate-800 px-2 py-1 rounded font-mono text-xs flex-1 truncate select-all border border-slate-200">
+                      {currentOrigin}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={handleCopyOrigin}
+                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded text-xs flex items-center gap-1 shrink-0 transition-colors"
+                    >
+                      {copiedOrigin ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedOrigin ? 'Tersalin' : 'Salin'}</span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-medium text-slate-500 w-16 shrink-0">Share URL:</span>
+                    <code className="bg-slate-100 text-slate-800 px-2 py-1 rounded font-mono text-xs flex-1 truncate select-all border border-slate-200">
+                      {sharedOrigin}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={handleCopySharedOrigin}
+                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded text-xs flex items-center gap-1 shrink-0 transition-colors"
+                    >
+                      {copiedSharedOrigin ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedSharedOrigin ? 'Tersalin' : 'Salin'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Active Client ID Info */}
+              <div className="pt-2 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="text-slate-700 truncate">
+                  <span className="text-slate-500 font-medium">OAuth Client ID aktif: </span>
+                  <code className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded text-indigo-700 font-semibold truncate">
+                    {currentClientId}
+                  </code>
+                </div>
                 <button
                   type="button"
-                  onClick={handleCopyOrigin}
-                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded text-xs flex items-center gap-1.5 shrink-0 transition-colors"
+                  onClick={() => setIsEditingClientId(!isEditingClientId)}
+                  className="text-indigo-600 hover:underline font-semibold text-xs shrink-0 self-start sm:self-auto"
                 >
-                  {copiedOrigin ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedOrigin ? 'Tersalin!' : 'Salin URL'}</span>
+                  {isEditingClientId ? 'Batal Ganti' : 'Ganti Client ID jika berbeda'}
                 </button>
               </div>
+
+              {/* Edit Client ID Form */}
+              {isEditingClientId && (
+                <form onSubmit={handleSaveClientId} className="p-2.5 bg-slate-50 rounded border border-slate-200 space-y-2">
+                  <p className="text-[11px] text-slate-600">
+                    Jika di Google Cloud Console Anda mengedit/membuat OAuth Client ID yang berbeda, tempelkan Client ID tersebut di sini:
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={tempClientId}
+                      onChange={(e) => setTempClientId(e.target.value)}
+                      placeholder="667023974320-xxxx.apps.googleusercontent.com"
+                      className="flex-1 px-2.5 py-1 font-mono text-xs border border-slate-300 rounded bg-white"
+                    />
+                    <button
+                      type="submit"
+                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded text-xs"
+                    >
+                      Simpan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetClientId}
+                      className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-xs"
+                    >
+                      Reset Default
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
 
-            <div className="space-y-1.5 text-slate-700">
-              <p>
-                <strong>Langkah 2: Tambahkan ke Google Cloud Console:</strong>
-              </p>
-              <ol className="list-decimal list-inside space-y-1 pl-1 text-slate-800 leading-relaxed">
+            {/* Troubleshooting Checklist for "URL sudah ada tapi masih Error 400" */}
+            <div className="p-3 bg-amber-100/60 rounded-lg border border-amber-300/80 space-y-2">
+              <strong className="text-amber-900 font-bold block text-xs">
+                💡 URL sudah ditambahkan tapi Google masih menampilkan "Error 400: origin_mismatch"? Periksa 4 hal ini:
+              </strong>
+              <ul className="space-y-1.5 list-disc list-inside text-amber-950 text-xs pl-1 leading-relaxed">
                 <li>
-                  Buka langsung halaman credentials proyek:{' '}
+                  <strong>Pastikan kolom yang diisi adalah "Authorized JavaScript origins"</strong> (bagian paling atas), <u>BUKAN</u> di <em>Authorized redirect URIs</em> (bagian bawah).
+                </li>
+                <li>
+                  <strong>Pastikan Anda mengedit Client ID yang tepat:</strong> Buka Client ID <code>{currentClientId}</code> di{' '}
                   <a
                     href="https://console.cloud.google.com/apis/credentials?project=gen-lang-client-0367272811"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-indigo-600 hover:underline font-semibold inline-flex items-center gap-0.5"
+                    className="text-indigo-700 underline font-semibold"
                   >
-                    Google Cloud Console Credentials (gen-lang-client-0367272811) <ExternalLink className="w-3 h-3" />
-                  </a>
+                    GCP Console Credentials
+                  </a>.
                 </li>
                 <li>
-                  Klik nama OAuth 2.0 Client ID (<strong>StudentAssignmentTracker</strong> atau Web client).
+                  <strong>Pastikan TIDAK ada tanda garis miring (<code>/</code>) di akhir URL</strong> (contoh salah: <code>...run.app/</code>).
                 </li>
                 <li>
-                  Di bagian <strong>Authorized JavaScript origins</strong> (Asal JavaScript yang diotorisasi), klik <strong>+ ADD URI</strong> dan tempelkan URL dari Langkah 1.
+                  <strong>Waktu propagasi Google Server (2 - 5 menit):</strong> Perubahan di Google Cloud Console memerlukan waktu sinkronisasi global. Tunggu 2-3 menit, lalu buka halaman ini di <strong>Tab Incognito / Private Window</strong> atau tekan <code>Ctrl + F5</code> dan klik <strong>Sign in with Google</strong> lagi.
                 </li>
-                <li>
-                  Klik <strong>SAVE (Simpan)</strong> di bagian bawah halaman.
-                </li>
-              </ol>
+              </ul>
             </div>
 
-            <div className="space-y-1 text-slate-700 pt-1">
-              <p>
-                <strong>Langkah 3:</strong> Kembali ke halaman ini dan klik tombol <strong>Sign in with Google</strong> lagi. Login akan langsung berhasil!
-              </p>
-            </div>
-
-            <div className="pt-2 border-t border-amber-200/80 flex items-center gap-2">
+            <div className="pt-2 border-t border-amber-200/80 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => setShowManualTokenInput(!showManualTokenInput)}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-semibold text-xs transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-semibold text-xs transition-colors"
               >
                 <KeyRound className="w-3.5 h-3.5" />
-                <span>Atau Masukkan Access Token Manual</span>
+                <span>Atau Masukkan Access Token Manual (Langsung Masuk)</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleLoadMockDemo}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-amber-200/60 hover:bg-amber-200 text-amber-900 border border-amber-300 font-semibold text-xs transition-colors"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-700" />
+                <span>Lihat Contoh Simulasi Data</span>
               </button>
             </div>
           </div>

@@ -22,9 +22,29 @@ import firebaseConfig from '../../firebase-applet-config.json';
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
-export const OAUTH_CLIENT_ID =
+export const DEFAULT_OAUTH_CLIENT_ID =
   firebaseConfig.oAuthClientId ||
   '667023974320-10g53oj6a2q9je8hhtkshq4955sj3kqb.apps.googleusercontent.com';
+
+export function getActiveClientId(): string {
+  if (typeof window !== 'undefined') {
+    const custom = localStorage.getItem('custom_oauth_client_id');
+    if (custom && custom.trim()) return custom.trim();
+  }
+  return DEFAULT_OAUTH_CLIENT_ID;
+}
+
+export function setActiveClientId(clientId: string) {
+  if (typeof window !== 'undefined') {
+    if (clientId.trim()) {
+      localStorage.setItem('custom_oauth_client_id', clientId.trim());
+    } else {
+      localStorage.removeItem('custom_oauth_client_id');
+    }
+  }
+}
+
+export const OAUTH_CLIENT_ID = DEFAULT_OAUTH_CLIENT_ID;
 
 export const WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/classroom.courses.readonly',
@@ -97,8 +117,9 @@ export function signInWithGisClient(
   }
 
   try {
+    const activeClientId = getActiveClientId();
     gisTokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: OAUTH_CLIENT_ID,
+      client_id: activeClientId,
       scope: WORKSPACE_SCOPES.join(' '),
       callback: (response: any) => {
         if (response.error) {
