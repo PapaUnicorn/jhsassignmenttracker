@@ -1,0 +1,6 @@
+{
+  "name": "EDUNEXUS - Classroom Task Monitor",
+  "description": "Student task monitor dashboard for Makarios Christian School to track Google Classroom coursework and submission statuses.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
